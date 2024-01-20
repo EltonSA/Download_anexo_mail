@@ -32,7 +32,7 @@ class EmailDownloaderBackend:
         self.attachment_extension = extension.lower()
 
     def validate_access_key(self, key):
-        return key == '1'  # Substitua 'sua_chave_de_acesso' pela chave desejada
+        return key == '1'  # Chave de acesso solicitado no front
 
     def download_attachments(self):
         # Verifica se a chave de acesso foi fornecida
