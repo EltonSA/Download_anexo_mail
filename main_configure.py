@@ -1,14 +1,15 @@
 import customtkinter as tk
 from tkinter import filedialog, messagebox
-import imaplib
-import email
+from datetime import datetime
 import os
 import re
 import logging
-from datetime import datetime
+import email
+import imaplib
+from config import ConfigWindow
 
 # Configuração do logging
-logging.basicConfig(filename='log_downloader.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename='email_downloader.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class EmailDownloaderBackend:
     def __init__(self):
@@ -17,6 +18,11 @@ class EmailDownloaderBackend:
         self.save_location = ''
         self.access_key = None
         self.attachment_extension = ''
+        self.server_address = ''
+        self.config_file = 'config.txt'  # Nome do arquivo de configuração
+
+        # Tenta carregar as configurações do arquivo, se existir
+        self.load_config()
 
     def set_credentials(self, email, password):
         self.email = email
@@ -31,8 +37,11 @@ class EmailDownloaderBackend:
     def set_attachment_extension(self, extension):
         self.attachment_extension = extension.lower()
 
+    def set_server_address(self, server_address):
+        self.server_address = server_address
+
     def validate_access_key(self, key):
-        return key == '1'  # Chave de acesso solicitado no front
+        return key == '1'  # Substitua 'sua_chave_de_acesso' pela chave desejada
 
     def download_attachments(self):
         # Verifica se a chave de acesso foi fornecida
@@ -50,8 +59,8 @@ class EmailDownloaderBackend:
             messagebox.showerror("Erro de Acesso", "Chave de acesso inválida. Acesso negado.")
             return
 
-        # Conecta ao servidor IMAP
-        server = imaplib.IMAP4_SSL("imap.gmail.com")
+        # Conecta-se ao servidor IMAP
+        server = imaplib.IMAP4_SSL(self.server_address)
         server.login(self.email, self.password)
 
         # Seleciona a caixa de entrada
@@ -146,13 +155,32 @@ class EmailDownloaderBackend:
         return re.sub(r'[\/:*?"<>|]', '_', name)
 
     def email_contains_attachment(self, msg):
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get('Content-Disposition') is not None:
-                    if self.attachment_extension == 'all' or (part.get_filename() and part.get_filename().lower().endswith(self.attachment_extension)):
-                        return True
+        for part in msg.walk():
+            if part.get_content_maintype() == 'multipart':
+                continue
+            if part.get('Content-Disposition') is None:
+                continue
+            if self.attachment_extension == 'all' or (part.get_filename() and part.get_filename().lower().endswith(self.attachment_extension)):
+                return True
         return False
 
+    def save_config(self):
+        # Salva as configurações em um arquivo de texto
+        with open(self.config_file, 'w') as config_file:
+            config_file.write(f"AccessKey={self.access_key}\n")
+            config_file.write(f"ServerAddress={self.server_address}\n")
+
+    def load_config(self):
+        # Tenta carregar as configurações do arquivo, se existir
+        if os.path.exists(self.config_file):
+            with open(self.config_file, 'r') as config_file:
+                lines = config_file.readlines()
+                for line in lines:
+                    key, value = line.strip().split('=')
+                    if key == 'AccessKey':
+                        self.access_key = value
+                    elif key == 'ServerAddress':
+                        self.server_address = value
 
 class EmailDownloaderFrontend:
     def __init__(self, master, backend):
@@ -164,48 +192,46 @@ class EmailDownloaderFrontend:
         self.email_var = tk.StringVar()
         self.password_var = tk.StringVar()
         self.save_location_var = tk.StringVar()
-        self.access_key_var = tk.StringVar()
         self.extension_var = tk.StringVar()
 
         # Configuração da interface
-        tk.CTkLabel(master, text="Chave de Acesso:").grid(row=0, column=0, sticky="e")
-        tk.CTkEntry(master, textvariable=self.access_key_var, show="*").grid(row=0, column=1)
+        tk.CTkLabel(master, text="Email:").grid(row=0, column=0, sticky="e")
+        tk.CTkEntry(master, textvariable=self.email_var).grid(row=0, column=1)
 
-        tk.CTkLabel(master, text="Email:").grid(row=1, column=0, sticky="e")
-        tk.CTkEntry(master, textvariable=self.email_var).grid(row=1, column=1)
+        tk.CTkLabel(master, text="Senha:").grid(row=1, column=0, sticky="e")
+        tk.CTkEntry(master, textvariable=self.password_var, show="*").grid(row=1, column=1)
 
-        tk.CTkLabel(master, text="Senha:").grid(row=2, column=0, sticky="e")
-        tk.CTkEntry(master, textvariable=self.password_var, show="*").grid(row=2, column=1)
+        tk.CTkLabel(master, text="Extensão do Anexo:").grid(row=2, column=0, sticky="e")
+        tk.CTkEntry(master, textvariable=self.extension_var).grid(row=2, column=1)
 
         tk.CTkLabel(master, text="Local de Salvamento:").grid(row=3, column=0, sticky="e")
         tk.CTkEntry(master, textvariable=self.save_location_var).grid(row=3, column=1)
         tk.CTkButton(master, text="Escolher Pasta", command=self.browse_folder).grid(row=3, column=2)
 
-        tk.CTkLabel(master, text="Extensão do Anexo:").grid(row=4, column=0, sticky="e")
-        tk.CTkEntry(master, textvariable=self.extension_var).grid(row=4, column=1)
+        tk.CTkButton(master, text="Baixar Anexos Especificos", command=self.download_attachments).grid(row=4, column=1, pady=10)
 
-        tk.CTkButton(master, text="Baixar Anexos", command=self.download_attachments).grid(row=5, column=1, pady=10)
+        tk.CTkButton(master, text="Baixar Todos os Anexos", command=self.download_all_attachments).grid(row=4, column=2, pady=10)
 
-        tk.CTkButton(master, text="Baixar Todos os Anexos", command=self.download_all_attachments).grid(row=5, column=2, pady=10)
+        tk.CTkButton(master, text="Configurações", command=self.open_config_window).grid(row=4, column=0, pady=10)
 
     def browse_folder(self):
         folder_selected = filedialog.askdirectory()
         self.save_location_var.set(folder_selected)
 
     def download_attachments(self):
-        self.backend.set_access_key(self.access_key_var.get())
         self.backend.set_credentials(self.email_var.get(), self.password_var.get())
         self.backend.set_save_location(self.save_location_var.get())
         self.backend.set_attachment_extension(self.extension_var.get())
         self.backend.download_attachments()
 
     def download_all_attachments(self):
-        self.backend.set_access_key(self.access_key_var.get())
         self.backend.set_credentials(self.email_var.get(), self.password_var.get())
         self.backend.set_save_location(self.save_location_var.get())
         self.backend.set_attachment_extension('all')
         self.backend.download_attachments()
 
+    def open_config_window(self):
+        config_window = ConfigWindow(self.master, self.backend)
 
 if __name__ == "__main__":
     root = tk.CTk()
