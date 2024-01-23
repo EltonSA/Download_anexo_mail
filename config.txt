@@ -1,0 +1,2 @@
+AccessKey=1
+ServerAddress=imap.hostinger.com

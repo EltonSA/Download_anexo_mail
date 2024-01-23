@@ -1,6 +1,6 @@
 import customtkinter as tk
 from tkinter import filedialog, messagebox
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import re
 import logging
@@ -41,9 +41,9 @@ class EmailDownloaderBackend:
         self.server_address = server_address
 
     def validate_access_key(self, key):
-        return key == '1'  # Substitua 'sua_chave_de_acesso' pela chave desejada
+        return key == '1'  # chave de acesso
 
-    def download_attachments(self):
+    def download_attachments(self, start_date, end_date):
         # Verifica se a chave de acesso foi fornecida
         if self.access_key is None:
             messagebox.showerror("Erro de Acesso", "Por favor, forneça a chave de acesso antes de continuar.")
@@ -66,8 +66,13 @@ class EmailDownloaderBackend:
         # Seleciona a caixa de entrada
         server.select(mailbox='inbox', readonly=True)
 
-        # Obtém os IDs dos e-mails
-        _, email_ids = server.search(None, 'ALL')
+        # Converte as datas fornecidas pelo usuário para o formato necessário
+        start_date = self.convert_to_imap_date_format(start_date)
+        end_date = self.convert_to_imap_date_format(end_date)
+
+        # Obtém os IDs dos e-mails com base nas datas fornecidas
+        search_criteria = f'(SINCE "{start_date}" BEFORE "{end_date}")'
+        _, email_ids = server.search(None, search_criteria)
         email_ids = email_ids[0].split()
 
         # Mapeia os nomes dos meses em inglês para português
@@ -90,11 +95,18 @@ class EmailDownloaderBackend:
             _, msg_data = server.fetch(email_id, '(RFC822)')
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
+            print(msg)
 
             # Verifica se o e-mail contém anexo com a extensão desejada
             if self.email_contains_attachment(msg):
                 sender = self.decode_sender(msg["From"])
                 sender_folder = os.path.join(self.save_location, self.clean_folder_name(sender))
+
+            # Verifica a data dos e-miais filtrados
+            if self.email_contains_attachment(msg):
+                senderDate = self.decode_sender(msg["Date"])
+                senderDate = datetime.strptime(msg['Date'],"%a, %d %b %Y %H:%M:%S %z")
+                print('data aqui:>>', senderDate)
 
                 # Adiciona pasta do ano e do mês
                 today = datetime.today()
@@ -143,6 +155,12 @@ class EmailDownloaderBackend:
                 log_message = f"Anexo baixado do e-mail {self.decode_sender(msg['From'])}: {filename} em: {sender_folder}"
                 logging.info(log_message)
                 print(log_message)
+
+    def convert_to_imap_date_format(self, user_date):
+        # Converte a data fornecida pelo usuário para o formato necessário para o filtro IMAP
+        user_date = datetime.strptime(user_date, '%d/%m/%Y')
+        imap_date_format = user_date.strftime('%d-%b-%Y')
+        return imap_date_format
 
     def decode_sender(self, sender):
         decoded, encoding = email.header.decode_header(sender)[0]
@@ -193,6 +211,8 @@ class EmailDownloaderFrontend:
         self.password_var = tk.StringVar()
         self.save_location_var = tk.StringVar()
         self.extension_var = tk.StringVar()
+        self.start_date_var = tk.StringVar()
+        self.end_date_var = tk.StringVar()
 
         # Configuração da interface
         tk.CTkLabel(master, text="Email:").grid(row=0, column=0, sticky="e")
@@ -204,15 +224,21 @@ class EmailDownloaderFrontend:
         tk.CTkLabel(master, text="Extensão do Anexo:").grid(row=2, column=0, sticky="e")
         tk.CTkEntry(master, textvariable=self.extension_var).grid(row=2, column=1)
 
-        tk.CTkLabel(master, text="Local de Salvamento:").grid(row=3, column=0, sticky="e")
-        tk.CTkEntry(master, textvariable=self.save_location_var).grid(row=3, column=1)
-        tk.CTkButton(master, text="Escolher Pasta", command=self.browse_folder).grid(row=3, column=2)
+        tk.CTkLabel(master, text="Data Inicial:").grid(row=3, column=0, sticky="e")
+        tk.CTkEntry(master, textvariable=self.start_date_var).grid(row=3, column=1)
 
-        tk.CTkButton(master, text="Baixar Anexos Especificos", command=self.download_attachments).grid(row=4, column=1, pady=10)
+        tk.CTkLabel(master, text="Data Final:").grid(row=4, column=0, sticky="e")
+        tk.CTkEntry(master, textvariable=self.end_date_var).grid(row=4, column=1)
 
-        tk.CTkButton(master, text="Baixar Todos os Anexos", command=self.download_all_attachments).grid(row=4, column=2, pady=10)
+        tk.CTkLabel(master, text="Local de Salvamento:").grid(row=5, column=0, sticky="e")
+        tk.CTkEntry(master, textvariable=self.save_location_var).grid(row=5, column=1)
+        tk.CTkButton(master, text="Escolher Pasta", command=self.browse_folder).grid(row=5, column=2)
 
-        tk.CTkButton(master, text="Configurações", command=self.open_config_window).grid(row=4, column=0, pady=10)
+        tk.CTkButton(master, text="Baixar Anexos Específicos", command=self.download_attachments).grid(row=6, column=1, pady=10)
+
+        tk.CTkButton(master, text="Baixar Todos os Anexos", command=self.download_all_attachments).grid(row=6, column=2, pady=10)
+
+        tk.CTkButton(master, text="Configurações", command=self.open_config_window).grid(row=6, column=0, pady=10)
 
     def browse_folder(self):
         folder_selected = filedialog.askdirectory()
@@ -222,13 +248,13 @@ class EmailDownloaderFrontend:
         self.backend.set_credentials(self.email_var.get(), self.password_var.get())
         self.backend.set_save_location(self.save_location_var.get())
         self.backend.set_attachment_extension(self.extension_var.get())
-        self.backend.download_attachments()
+        self.backend.download_attachments(self.start_date_var.get(), self.end_date_var.get())
 
     def download_all_attachments(self):
         self.backend.set_credentials(self.email_var.get(), self.password_var.get())
         self.backend.set_save_location(self.save_location_var.get())
         self.backend.set_attachment_extension('all')
-        self.backend.download_attachments()
+        self.backend.download_attachments(self.start_date_var.get(), self.end_date_var.get())
 
     def open_config_window(self):
         config_window = ConfigWindow(self.master, self.backend)
