@@ -6,6 +6,8 @@ import re
 import logging
 import email
 import imaplib
+import time
+
 from config import ConfigWindow
 
 # Configuração do logging
@@ -19,9 +21,9 @@ class EmailDownloaderBackend:
         self.access_key = None
         self.attachment_extension = ''
         self.server_address = ''
-        self.config_file = 'config.txt'  # Nome do arquivo de configuração
-
-        # Tenta carregar as configurações do arquivo, se existir
+        self.sender_filter = ''
+        self.config_file = 'config.txt'
+        self.want_details = False
         self.load_config()
 
     def set_credentials(self, email, password):
@@ -40,42 +42,39 @@ class EmailDownloaderBackend:
     def set_server_address(self, server_address):
         self.server_address = server_address
 
+    def set_sender_filter(self, sender_filter):
+        self.sender_filter = sender_filter
+
+    def set_want_details(self, want_details):
+        self.want_details = want_details
+
     def validate_access_key(self, key):
-        return key == '1'  # chave de acesso
+        return key == '1'
 
     def download_attachments(self, start_date, end_date):
-        # Verifica se a chave de acesso foi fornecida
         if self.access_key is None:
             messagebox.showerror("Erro de Acesso", "Por favor, forneça a chave de acesso antes de continuar.")
             return
 
-        # Verifica se as credenciais, o local de salvamento e a extensão foram fornecidos
         if not self.email or not self.password or not self.save_location:
             messagebox.showerror("Ops!!!", "Por favor, forneça email, senha e local de salvamento.")
             return
 
-        # Verifica a chave de acesso
         if not self.validate_access_key(self.access_key):
             messagebox.showerror("Erro de Acesso", "Chave de acesso inválida. Acesso negado.")
             return
 
-        # Conecta-se ao servidor IMAP
         server = imaplib.IMAP4_SSL(self.server_address)
         server.login(self.email, self.password)
-
-        # Seleciona a caixa de entrada
         server.select(mailbox='inbox', readonly=True)
 
-        # Converte as datas fornecidas pelo usuário para o formato necessário
         start_date = self.convert_to_imap_date_format(start_date)
         end_date = self.convert_to_imap_date_format(end_date)
 
-        # Obtém os IDs dos e-mails com base nas datas fornecidas
         search_criteria = f'(SINCE "{start_date}" BEFORE "{end_date}")'
         _, email_ids = server.search(None, search_criteria)
         email_ids = email_ids[0].split()
 
-        # Mapeia os nomes dos meses em inglês para português
         meses_portugues = {
             'January': 'Janeiro',
             'February': 'Fevereiro',
@@ -97,50 +96,63 @@ class EmailDownloaderBackend:
             msg = email.message_from_bytes(raw_email)
             print(msg)
 
-            # Verifica se o e-mail contém anexo com a extensão desejada
             if self.email_contains_attachment(msg):
                 sender = self.decode_sender(msg["From"])
                 sender_folder = os.path.join(self.save_location, self.clean_folder_name(sender))
 
-            # Verifica a data dos e-miais filtrados
-            if self.email_contains_attachment(msg):
-                senderDate = self.decode_sender(msg["Date"])
-                senderDate = datetime.strptime(msg['Date'],"%a, %d %b %Y %H:%M:%S %z")
-                print('data aqui:>>', senderDate)
+                if self.email_contains_attachment(msg):
+                    senderDate = self.decode_sender(msg["Date"])
+                    senderDate = datetime.strptime(msg['Date'],"%a, %d %b %Y %H:%M:%S %z")
 
-                # Adiciona pasta do ano e do mês
-                today = datetime.today()
-                year_folder = os.path.join(sender_folder, str(today.year))
-                
-                # Nome do mês em português
-                month_folder_name = meses_portugues[today.strftime('%B')]
-                month_folder = os.path.join(year_folder, month_folder_name)
+                    today = datetime.today()
+                    year_folder = os.path.join(sender_folder, str(today.year))
 
-                # Cria a estrutura de pastas se não existir
-                for folder in [sender_folder, year_folder, month_folder]:
-                    if not os.path.exists(folder):
-                        os.makedirs(folder)
+                    month_folder_name = meses_portugues[today.strftime('%B')]
+                    month_folder = os.path.join(year_folder, month_folder_name)
 
-                self._download_attachments(msg, month_folder)
+                    for folder in [sender_folder, year_folder, month_folder]:
+                        if not os.path.exists(folder):
+                            os.makedirs(folder)
 
-                # Log
-                attachments = [part.get_filename() for part in msg.walk() if part.get('Content-Disposition') is not None]
-                log_message = f"Anexo(s) baixado(s) do e-mail {sender}: {attachments} em: {month_folder}"
-                logging.info(log_message)
-                print(log_message)
+                    details = {
+                        'sender': sender,
+                        'date': senderDate,
+                        'subject': self.decode_sender(msg["Subject"]),
+                        'body': msg.get_payload()
+                    }
 
-        # Fecha a conexão com o servidor
+                    self.set_sender_filter(sender)
+                    self.set_want_details(True)
+                    self.want_details = True
+                    self._download_attachments(msg, month_folder, details)
+
+                    attachments = [part.get_filename() for part in msg.walk() if part.get('Content-Disposition') is not None]
+                    log_message = f"Detalhes e anexo(s) baixado(s) do e-mail {sender}: {attachments} em: {month_folder}"
+                    logging.info(log_message)
+                    print(log_message)
+
         server.close()
         server.logout()
 
-        # Limpa campos de e-mail e senha
         self.email = ''
         self.password = ''
 
-        # Exibe mensagem de conclusão
         messagebox.showinfo("Mensagem", "Os arquivos foram baixados com sucesso!")
 
-    def _download_attachments(self, msg, sender_folder):
+    def _download_attachments(self, msg, sender_folder, details):
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_number = int(time.time() * 1000) % 1000
+        file_name = f"{timestamp}_{unique_number}_attachment.txt"
+        file_path = os.path.join(sender_folder, file_name)
+
+        if self.want_details:
+            with open(file_path, 'w', encoding='utf-8') as details_file:
+                details_file.write(f"Remetente: {details['sender']}\n")
+                details_file.write(f"Data: {details['date'].strftime('%d/%m/%Y %H:%M:%S')}\n")
+                details_file.write(f"Assunto: {details['subject']}\n")
+                details_file.write("\nCorpo do e-mail:\n")
+                details_file.write(str(details['body']))
+
         for part in msg.walk():
             if part.get_content_maintype() == 'multipart':
                 continue
@@ -151,10 +163,11 @@ class EmailDownloaderBackend:
                 filepath = os.path.join(sender_folder, filename)
                 with open(filepath, 'wb') as file:
                     file.write(part.get_payload(decode=True))
-                # Log
-                log_message = f"Anexo baixado do e-mail {self.decode_sender(msg['From'])}: {filename} em: {sender_folder}"
+
+                log_message = f"Anexo baixado do e-mail {details['sender']}: {filename} em: {sender_folder}"
                 logging.info(log_message)
                 print(log_message)
+
 
     def convert_to_imap_date_format(self, user_date):
         # Converte a data fornecida pelo usuário para o formato necessário para o filtro IMAP
@@ -170,7 +183,9 @@ class EmailDownloaderBackend:
             return str(decoded)
 
     def clean_folder_name(self, name):
-        return re.sub(r'[\/:*?"<>|]', '_', name)
+        invalid_chars = r'[\/:*?"<>|]'
+        return re.sub(invalid_chars, '_', name)
+
 
     def email_contains_attachment(self, msg):
         for part in msg.walk():
@@ -251,10 +266,19 @@ class EmailDownloaderFrontend:
         self.backend.download_attachments(self.start_date_var.get(), self.end_date_var.get())
 
     def download_all_attachments(self):
+        start_date = self.start_date_var.get()
+        end_date = self.end_date_var.get()
+
+        # Verifica se as datas estão preenchidas
+        if not start_date or not end_date:
+            messagebox.showerror("Erro", "Preencha as datas antes de baixar os anexos.")
+            return
+
         self.backend.set_credentials(self.email_var.get(), self.password_var.get())
         self.backend.set_save_location(self.save_location_var.get())
         self.backend.set_attachment_extension('all')
-        self.backend.download_attachments(self.start_date_var.get(), self.end_date_var.get())
+        self.backend.download_attachments(start_date, end_date)
+
 
     def open_config_window(self):
         config_window = ConfigWindow(self.master, self.backend)
